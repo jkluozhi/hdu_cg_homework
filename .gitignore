@@ -1,0 +1,25 @@
+
+# Visual Studio 缓存
+.vs/
+*.suo
+*.user
+
+# 编译生成文件
+Debug/
+Release/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+
+# 编译中间文件
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.dll
+*.pch
+*.idb
+
+# Git 自身
+.git/
