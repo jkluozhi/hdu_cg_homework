@@ -135,11 +135,13 @@
     <ClCompile Include="raster.cpp" />
     <ClCompile Include="clip3d.cpp" />
     <ClCompile Include="objload.cpp" />
+    <ClCompile Include="curves.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="camera.h" />
     <ClInclude Include="clip3d.h" />
     <ClInclude Include="objload.h" />
+    <ClInclude Include="curves.h" />
     <ClInclude Include="math3d.h" />
     <ClInclude Include="raster.h" />
   </ItemGroup>

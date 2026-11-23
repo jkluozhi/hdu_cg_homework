@@ -33,6 +33,9 @@
     <ClCompile Include="objload.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="curves.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="math3d.h">
@@ -48,6 +51,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="objload.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="curves.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
