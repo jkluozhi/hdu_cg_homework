@@ -15,6 +15,8 @@ double gWinX = 4.0, gWinY = 3.0;   /* 投影窗口半宽/半高（世界单位�
 static double* gZbuf = 0; 
 static int     gZbufCap = 0;
 
+int gZbufOn = 1;               /* 1 = 深度测试；0 = 关闭（观察每面颜色差异） */
+
 double gClipX0 = -500, gClipY0 = -500;
 
 double gClipX1 = 500, gClipY1 = 500;
@@ -225,7 +227,7 @@ void fillTriangleDepth(const double sx[3], const double sy[3],
 {
     double area = edge2(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
     if (fabs(area) < 1e-9) return;
-    double sgn = (area > 0) ? 1.0 : -1.0;
+    double sgn = (area > 0) ? 1.0 : -1.0;///统一成逆时针
     double inv = 1.0 / (area * sgn);
 
     /* 整数包围盒，裁剪到窗口内 */
@@ -258,8 +260,10 @@ void fillTriangleDepth(const double sx[3], const double sy[3],
             double z = gPersp ? 1.0 / (l0 * iz[0] + l1 * iz[1] + l2 * iz[2])
                               :        l0 * zv[0] + l1 * zv[1] + l2 * zv[2];
             int idx = rowBase + (x + w_width / 2);
-            if (z <= gZbuf[idx]) continue; 
-            gZbuf[idx] = z;
+            if (gZbufOn) {
+                if (z <= gZbuf[idx]) continue; 
+                gZbuf[idx] = z;
+            }
             glVertex2i(x, y);
         }
     }

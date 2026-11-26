@@ -11,7 +11,7 @@ int loadObj(const char* path, double targetRadius,
     if (!file.is_open()) return 0;
 
     std::vector<Vec3> verts;
-    std::vector<int>  faces;              /* flat triangle list, 3 per face */
+    std::vector<int>  faces;             
     std::string line;
 
     while (std::getline(file, line)) {

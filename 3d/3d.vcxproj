@@ -130,6 +130,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="3d.cpp" />
+    <ClCompile Include="lighting.cpp" />
     <ClCompile Include="math3d.cpp" />
     <ClCompile Include="camera.cpp" />
     <ClCompile Include="raster.cpp" />

@@ -23,7 +23,7 @@ static int buildPlanes(Plane* pl)
         pl[n].a = 0;  pl[n].b = 1;  pl[n].c = 0; pl[n].e = wy; n++;  
         pl[n].a = 0;  pl[n].b = -1; pl[n].c = 0; pl[n].e = wy; n++;  
     }
-    pl[n].a = 0; pl[n].b = 0; pl[n].c = -1; pl[n].e = d;    n++;   
+    pl[n].a = 0; pl[n].b = 0; pl[n].c = -1; pl[n].e = gNear; n++;   
     pl[n].a = 0; pl[n].b = 0; pl[n].c =  1; pl[n].e = GFAR; n++;    
     return n;
 }
@@ -33,7 +33,8 @@ static double peval(const Plane* p, Vec3 v)
     return p->a * v.x + p->b * v.y + p->c * v.z + p->e;
 }
 
-int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap)
+int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap,
+                Vec3* cap, int capMax, int* capN)
 {
     Vec3 bufA[MAXVTX], bufB[MAXVTX];
     Vec3* src = bufA;
@@ -44,6 +45,8 @@ int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap)
 
     for (int i = 0; i < m; i++) src[i] = in[i];
 
+    if (capN) *capN = 0;
+    const int nearIdx = 4;   /* buildPlanes 里近平面固定排第 5 个（4 侧面之后） */
     for (int p = 0; p < np && m > 0; p++) {
         int k = 0;
         for (int i = 0; i < m; i++) {
@@ -60,6 +63,9 @@ int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap)
                 I.y = P.y + t * (Q.y - P.y);
                 I.z = P.z + t * (Q.z - P.z);
                 dst[k++] = I;
+                /* 近平面这一刀产生的交点，就是截面轮廓上的点 */
+                if (p == nearIdx && cap && capN && *capN < capMax)
+                    cap[(*capN)++] = I;
             }
         }
         { Vec3* tmp = src; src = dst; dst = tmp; }

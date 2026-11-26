@@ -48,7 +48,7 @@ Matrix rotationZ(double deg) {
     return M;
 }
 
-/* 仿射矩阵乘点（w = 1，不做除法；除法在投影那一步单独做） */
+/* 仿射矩阵乘点（w = 1 */
 Vec3 applyMatrix(Matrix M, Vec3 p)
 {
     Vec3 r;

@@ -6,6 +6,7 @@
  * in  : input vertices, n of them (view space)
  * out : output buffer, capacity outCap
  * returns number of output vertices (0 = fully clipped away) */
-int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap);
+int clipFrustum(const Vec3* in, int n, Vec3* out, int outCap,
+                Vec3* cap, int capMax, int* capN);
 
 #endif

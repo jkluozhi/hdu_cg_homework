@@ -7,17 +7,25 @@
 #include "objload.h"
 #include "curves.h"
 
+/* 手动声明 GetAsyncKeyState（避免 include <windows.h> 与 GLUT.H 宏冲突），
+   用于 idle 里轮询 WASD 键状态 —— GLUT 的 keyboard 回调在鼠标按钮按住时不触发 */
+extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
+#pragma comment(lib, "user32.lib")
+
 
 
 /* ============================================================
-
- *   a/d  平移 x     w/s  平移 y        z/x  等比缩放
- *   1/2/3 选旋转轴   q/e  绕该轴 ±10°
- *   j/l  眼睛 x     u/o  眼睛 y        i/k  眼睛 z
- *   [ / ] 改 d      p    正交 <-> 透视  r    复位
+ *   鼠标+键盘控制
+ *     按住右键 + 移动鼠标    Orbit 绕原点旋转视角
+ *     按住右键 + W/A/S/D     相机前后 / 左右绕转
+ *     滚轮                   dolly 拉近拉远
+ *   5    在 OBJ
  *   h    面片填充+深度消隐 <-> 纯线框
+ *   b    开启/关闭 z-buffer 深度测试（看每面颜色差异）
+ *   n/N   近平面推远/拉近（展示切割截面）
+ *   -/=   缩小/放大视景体（投影窗口）
+ *   p    正交 <-> 透视      r    复位
  *   m    加载 / 隐藏 lily OBJ 模型
- *   5    在 OBJ / Bézier曲线 / B样条曲线 / Bézier曲面 / B样条曲面 间切换
  * ============================================================ */
 
 
@@ -30,6 +38,7 @@ typedef struct {
     int         nf;
     int         n;
     Vec3        color;
+    Vec3* faceColor;   /* 每面一个颜色（NULL = 全部用 color） */
     Matrix      model;
     int         twoSided;   /* 1 = 不剔除背面（曲面用，双面可见） */
 } Mesh;
@@ -37,24 +46,35 @@ typedef struct {
 
 
 Matrix gModel;                  /* 模型变换（累积） */
-int    gAxis = 2;               /* 当前旋转轴：0=x 1=y 2=z */
 int    gFill = 1;               /* 1 = 面片填充 + z-buffer 消隐；0 = 纯线框 */
 
-#define OBJ_PATH "C:/Users/21505/Desktop/ComputerGraphics/lily-impeller.obj"
-Mesh   gObjMesh;                /* 运行时加载的 OBJ 网格（m 键加载） */
+/* 鼠标/键盘状态（仿 UE 相机控制） */
+static int gRmbDown = 0;        /* 右键是否按住 */
+static int gLastX = 0, gLastY = 0;
+
+#define OBJ_PATH "C:/Users/21505/Desktop/ComputerGraphics/cube_torus.obj"
+Mesh   gObjMesh = { 0, 0, 0, 0, 0, {0,0,0}, 0, {{0}}, 0 };   /* 运行时加载的 OBJ 网格（m 键加载） */
 int    gShowObj = 0;            /* 1 = 把 OBJ 网格加入渲染列表 */
 
 /* 曲线/曲面：gMode 用 '5' 键在 5 个对象间轮流切换 */
 int    gMode = 0;               /* 0=OBJ 1=Bézier曲线 2=B样条曲线 3=Bézier曲面 4=B样条曲面 */
 #define CURVE_N 70
 static Vec3  gBezPts[CURVE_N + 1], gBezCtrl[4];   /* Bézier 曲线采样点 / 控制点 */
-static Vec3  gBsPts[CURVE_N + 1],  gBsCtrl[7];    /* B 样条曲线采样点 / 控制点 */
+static Vec3  gBsPts[CURVE_N + 1], gBsCtrl[7];    /* B 样条曲线采样点 / 控制点 */
 static Mesh  gBezierSurf, gBSplineSurf;           /* 两个曲面网格 */
+
+/* 近平面截面：收集近平面切割产生的交点（视图空间），绘制成截面 cap */
+#define MAX_CAP 32768
+static Vec3 gCap[MAX_CAP];
+static int  gCapN = 0;
+static double gCapSx[MAX_CAP], gCapSy[MAX_CAP];   /* 投影后的屏幕坐标 */
+static int    gCapOrder[MAX_CAP];
+static double gCapCx, gCapCy;                      /* 排序中心 */
 /* w_width / w_height、gScale、裁剪窗口、updateMap 都在 raster.cpp，
    本文件通过 raster.h 的 extern 使用 */
 
 
-/* ================= 曲线/曲面数据构建 ================= */
+   /* ================= 曲线/曲面数据构建 ================= */
 static void drawPolyline(const Vec3* pts, int n, Matrix V, float r, float g, float b)
 {
     glColor3f(r, g, b);
@@ -62,109 +82,68 @@ static void drawPolyline(const Vec3* pts, int n, Matrix V, float r, float g, flo
         drawSegment(pts[i], pts[i + 1], V);
 }
 
-typedef struct { Vec3 P[4][4]; } BezSurfAux;
-static Vec3 bezSurfEval(double u, double v, void* aux)
+/* 按屏幕极角排序截面点（用于三角扇填充） */
+static bool capAngleLess(int a, int b)
 {
-    BezSurfAux* a = (BezSurfAux*)aux;
-    return bezierSurfacePoint(a->P, u, v);
+    double aa = atan2(gCapSy[a] - gCapCy, gCapSx[a] - gCapCx);
+    double ab = atan2(gCapSy[b] - gCapCy, gCapSx[b] - gCapCx);
+    return aa < ab;
 }
 
-typedef struct { Vec3 P[5][5]; const double* U; const double* V; } BsSurfAux;
-static Vec3 bsSurfEval(double u, double v, void* aux)
+/* 手写选择排序（避免 <algorithm>/<stdlib.h> 与课程版 GLUT.H 冲突） */
+static void capSort(int* order, int m)
 {
-    BsSurfAux* a = (BsSurfAux*)aux;
-    return bsplineSurfacePoint(a->P, a->U, a->V, 3, u, v);
+    for (int i = 0; i < m - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < m; j++)
+            if (capAngleLess(order[j], order[best])) best = j;
+        if (best != i) { int t = order[i]; order[i] = order[best]; order[best] = t; }
+    }
 }
 
-static void buildSurfMesh(Mesh* m, SurfEval ev, void* aux, int Nu, int Nv,
-                          Vec3 off, Vec3 color)
+/* 绘制近平面截面：把收集到的截面点投影、排序、三角扇填充 */
+static void drawClipCap(void)
 {
-    Vec3* V = 0;  int* F = 0;
-    int nf = buildSurfaceMesh(ev, aux, Nu, Nv, &V, &F);
-    for (int i = 0; i < Nu * Nv; i++) {        /* 居中平移 */
-        V[i].x += off.x;  V[i].y += off.y;  V[i].z += off.z;
+    if (gCapN < 3) return;
+
+    /* 1. 投影到屏幕 */
+    int m = 0;
+    for (int i = 0; i < gCapN; i++) {
+        double px, py;
+        if (!projectPoint(gCap[i], &px, &py)) continue;
+        toPixels(px, py, &gCapSx[m], &gCapSy[m]);
+        gCapOrder[m] = m;
+        m++;
     }
-    m->v = V;  m->nv = Nu * Nv;
-    m->face = F;  m->nf = nf;  m->n = 3;
-    m->color = color;  m->model = identity();  m->twoSided = 1;
+    if (m < 3) return;
+
+    /* 2. 求屏幕重心 */
+    double cx = 0, cy = 0;
+    for (int i = 0; i < m; i++) { cx += gCapSx[i]; cy += gCapSy[i]; }
+    gCapCx = cx / m;  gCapCy = cy / m;
+
+    /* 3. 按极角排序 */
+    capSort(gCapOrder, m);
+
+    /* 4. 三角扇填充（截面颜色，参与 z-buffer） */
+    Vec3 col = { 1.0, 0.45, 0.15 };   /* 橙色截面 */
+    for (int i = 1; i + 1 < m; i++) {
+        int a = gCapOrder[0], b = gCapOrder[i], c = gCapOrder[i + 1];
+        double tx[3] = { gCapSx[a], gCapSx[b], gCapSx[c] };
+        double ty[3] = { gCapSy[a], gCapSy[b], gCapSy[c] };
+        double tz[3] = { gNear, gNear, gNear };   /* 截面都在近平面 z=gNear 上 */
+        fillTriangleDepth(tx, ty, tz, col);
+    }
 }
 
 
-
-
-static void initCurves(void)
-{
-    /* ---- 三次 Bézier 曲线：控制点 (0,0)(1,2)(3,2)(4,0) ---- */
-    Vec3 bp[4] = { {0,0,0},{1,2,0},{3,2,0},{4,0,0} };
-    Vec3 offB = { -2, -1, 0 };                 /* 居中偏移：包围盒中心 (2,1,0) */
-    for (int i = 0; i < 4; i++) {              
-        gBezCtrl[i].x = bp[i].x + offB.x;
-        gBezCtrl[i].y = bp[i].y + offB.y;
-        gBezCtrl[i].z = bp[i].z + offB.z;
-    }
-    for (int i = 0; i <= CURVE_N; i++) {
-        double t = (double)i / CURVE_N;
-        double b0 = (1 - t) * (1 - t) * (1 - t);   
-        double b1 = 3 * t * (1 - t) * (1 - t);     
-        double b2 = 3 * t * t * (1 - t);           
-        double b3 = t * t * t;                     
-
-        gBezPts[i].x = b0 * bp[0].x + b1 * bp[1].x + b2 * bp[2].x + b3 * bp[3].x + offB.x;
-        gBezPts[i].y = b0 * bp[0].y + b1 * bp[1].y + b2 * bp[2].y + b3 * bp[3].y + offB.y;
-        gBezPts[i].z = 0.0;                        /* 这条曲线全程 z=0 */
-    }
-
-
-    /* ---- 三次夹持 B 样条曲线：7 个控制点，节点 U ---- */
-    Vec3 cp[7] = { {0,0,0},{1,2,0},{2,3,0},{3,2,0},{4,3,0},{5,1,0},{6,0,0} };
-    double Uc[11] = { 0,0,0,0,0.25,0.5,0.75,1,1,1,1 };
-    Vec3 offC = { -3, -1.5, 0 };
-    for (int i = 0; i < 7; i++) {
-        gBsCtrl[i].x = cp[i].x + offC.x;
-        gBsCtrl[i].y = cp[i].y + offC.y;
-        gBsCtrl[i].z = cp[i].z + offC.z;
-    }
-    for (int i = 0; i <= CURVE_N; i++) {
-        double t = (double)i / CURVE_N;
-        Vec3 p = bsplinePoint(cp, 6, Uc, 3, t);
-        gBsPts[i].x = p.x + offC.x;
-        gBsPts[i].y = p.y + offC.y;
-        gBsPts[i].z = p.z + offC.z;
-    }
-
-    /* ---- 双三次 Bézier 曲面：Pij=(i,j,hij)，仅 h11=4 ---- */
-    BezSurfAux ba;
-    for (int i = 0; i < 4; i++)
-        for (int j = 0; j < 4; j++) {
-            ba.P[i][j].x = (double)i;
-            ba.P[i][j].y = (double)j;
-            ba.P[i][j].z = (i == 1 && j == 1) ? 4.0 : 0.0;
-        }
-    Vec3 offS1 = { -1.5, -1.5, -2.0 };
-    Vec3 colS1 = { 0.25, 0.55, 0.30 };
-    buildSurfMesh(&gBezierSurf, bezSurfEval, &ba, 24, 24, offS1, colS1);
-
-    /* ---- 双三次夹持 B 样条曲面：Pij=(i,j,hij)，仅 h22=4 ---- */
-    const double Us[9] = { 0,0,0,0,0.5,1,1,1,1 };
-    const double Vs[9] = { 0,0,0,0,0.6,1,1,1,1 };
-    BsSurfAux sa;
-    sa.U = Us;  sa.V = Vs;
-    for (int i = 0; i < 5; i++)
-        for (int j = 0; j < 5; j++) {
-            sa.P[i][j].x = (double)i;
-            sa.P[i][j].y = (double)j;
-            sa.P[i][j].z = (i == 2 && j == 2) ? 4.0 : 0.0;
-        }
-    Vec3 offS2 = { -2, -2, -2 };
-    Vec3 colS2 = { 0.75, 0.45, 0.15 };
-    buildSurfMesh(&gBSplineSurf, bsSurfEval, &sa, 24, 24, offS2, colS2);
-}
 
 /* ================= 显示 ================= */
 void display(void)
 {
     glClear(GL_COLOR_BUFFER_BIT);
     zbufClear();                            /* 深度缓冲清零 */
+    gCapN = 0;                              /* 截面点清零 */
 
     Matrix V = viewMatrix();
 
@@ -175,7 +154,7 @@ void display(void)
     case 0: if (gShowObj && gObjMesh.nv > 0) active[nActive++] = &gObjMesh; break;
     case 3: active[nActive++] = &gBezierSurf;  break;
     case 4: active[nActive++] = &gBSplineSurf; break;
-    default: break;   /* 曲线模式（1/2）走下面的折线绘制 */
+    default: break;   /* 曲线模式走下面的折线绘制 */
     }
 
     for (int m = 0; m < nActive; m++) {
@@ -191,9 +170,12 @@ void display(void)
                 vv[i] = applyMatrix(V, applyMatrix(M, mesh->v[idx[i]]));
 
             /* 2. 视锥体六平面裁剪*/
-            Vec3 cv[16];
-            int nc = clipFrustum(vv, mesh->n, cv, 16);
-            if (nc < 3) continue;        
+            Vec3 cv[16], capv[16];
+            int capn = 0;
+            int nc = clipFrustum(vv, mesh->n, cv, 16, capv, 16, &capn);
+            if (nc < 3) continue;
+            for (int i = 0; i < capn && gCapN < MAX_CAP; i++)
+                gCap[gCapN++] = capv[i];   /* 收集近平面交点 */
 
             /* 3. 投影 -> 屏幕像素 */
             double sx[16], sy[16], zv[16];
@@ -214,8 +196,8 @@ void display(void)
             }
             if (area <= 0.0 && !mesh->twoSided) continue;
 
-            
-            Vec3 col = mesh->color;
+
+            Vec3 col = mesh->faceColor ? mesh->faceColor[f] : mesh->color;
 
             /* 6. z-buffer 逐像素深度测试 */
             if (gFill) {
@@ -227,8 +209,8 @@ void display(void)
                 }
             }
 
-            /* 7. 描边（OBJ 面太多，跳过描边） */
-            if (mesh != &gObjMesh) {
+
+            if (mesh = &gObjMesh) {
                 if (gFill) glColor3f(0.12f, 0.12f, 0.12f);
                 else       glColor3f((float)mesh->color.x, (float)mesh->color.y, (float)mesh->color.z);
                 for (int i = 0; i < nc; i++) {
@@ -239,11 +221,14 @@ void display(void)
         }
     }
 
+
+
     /* 曲线（模式 1/2）：灰色控制多边形 + 彩色曲线本身 */
     if (gMode == 1) {
         drawPolyline(gBezCtrl, 4, V, 0.70f, 0.70f, 0.70f);
         drawPolyline(gBezPts, CURVE_N + 1, V, 0.85f, 0.15f, 0.15f);
-    } else if (gMode == 2) {
+    }
+    else if (gMode == 2) {
         drawPolyline(gBsCtrl, 7, V, 0.70f, 0.70f, 0.70f);
         drawPolyline(gBsPts, CURVE_N + 1, V, 0.15f, 0.25f, 0.85f);
     }
@@ -263,42 +248,16 @@ void display(void)
 /* ================= 键盘交互 ================= */
 void keyboard(unsigned char k, int x, int y)
 {
-    const double s = 0.5;
-    Matrix M = identity();
-
     switch (k) {
-        /* 模型变换 */
-    case 'a': M = translation(-s, 0, 0); break;
-    case 'd': M = translation(s, 0, 0); break;
-    case 'w': M = translation(0, s, 0); break;
-    case 's': M = translation(0, -s, 0); break;
-    case 'z': M = scaling(1.1, 1.1, 1.1); break;
-    case 'x': M = scaling(1 / 1.1, 1 / 1.1, 1 / 1.1); break;
+        /* 近平面：往眼睛方向推 / 往远处拉，展示切割 */
+    case 'n': if (gNear > -9.5) gNear -= 0.5; break;
+    case 'N': if (gNear < -0.5) gNear += 0.5; break;
 
-        /* 轴向旋转 */
-    case '1': gAxis = 0; break;
-    case '2': gAxis = 1; break;
-    case '3': gAxis = 2; break;
-    case 'q':
-    case 'e': {
-        double a = (k == 'q') ? 10.0 : -10.0;
-        M = (gAxis == 0) ? rotationX(a)
-          : (gAxis == 1) ? rotationY(a)
-                         : rotationZ(a);
-        break;
-    }
-
-        /* 相机：移动眼睛 */
-    case 'j': gEye.x -= s; break;
-    case 'l': gEye.x += s; break;
-    case 'u': gEye.y += s; break;
-    case 'o': gEye.y -= s; break;
-    case 'i': gEye.z -= s; break;
-    case 'k': gEye.z += s; break;
+        /* 视景体（投影窗口）缩放：缩小后模型相对变大，移动时容易被裁剪 */
+    case '-': gWinX *= 0.8;  gWinY *= 0.8;  updateMap(w_width, w_height); break;
+    case '=': gWinX *= 1.25; gWinY *= 1.25; updateMap(w_width, w_height); break;
 
         /* 投影 */
-    case '[': gD -= 1.0; break;
-    case ']': gD += 1.0; break;
     case 'p': gPersp = !gPersp; break;
 
         /* 曲线/曲面切换：OBJ -> Bézier曲线 -> B样条曲线 -> Bézier曲面 -> B样条曲面 */
@@ -310,38 +269,86 @@ void keyboard(unsigned char k, int x, int y)
         /* 填充/消隐开关 */
     case 'h': gFill = !gFill; break;
 
+        /* z-buffer 开关：关掉后能看到每面颜色的差异（画家算法） */
+    case 'b': gZbufOn = !gZbufOn; break;
+
         /* 加载 / 隐藏 OBJ 模型 */
     case 'm': {
         if (gObjMesh.nv == 0) {                 /* 第一次按：读文件 */
             Vec3* vv = 0;  int* ff = 0;
             if (loadObj(OBJ_PATH, 2.0, &vv, &gObjMesh.nv, &ff, &gObjMesh.nf)) {
-                gObjMesh.v    = vv;
+                gObjMesh.v = vv;
                 gObjMesh.face = ff;
-                gObjMesh.n    = 3;
-                gObjMesh.color.x = 0.75;  gObjMesh.color.y = 0.55;  gObjMesh.color.z = 0.30;
+                gObjMesh.n = 3;
                 gObjMesh.model = identity();
+                ///assignRainbowFaceColors(&gObjMesh);   /* 每面不同颜色 */
                 gShowObj = 1;
             }
-        } else {
+        }
+        else {
             gShowObj = !gShowObj;               /* 之后按：显示 <-> 隐藏 */
         }
         break;
     }
 
-        /* 复位 */
+            /* 复位 */
     case 'r':
         gModel = identity();
-        gEye.x = 0;  gEye.y = 0;  gEye.z = 6;
-        gCenter.x = 0;  gCenter.y = 0;  gCenter.z = 0;
-        gUp.x = 0;  gUp.y = 1;  gUp.z = 0;
-        gD = -2.0;  gPersp = 0;  gAxis = 2;  gFill = 1;
+        gD = -2.0;  gPersp = 0;  gFill = 1;
+        gNear = -2.0;   /* 近平面复位到与投影窗口重合 */
+        gZbufOn = 1;    /* 恢复深度测试 */
+        gWinX = 4.0;  gWinY = 3.0;  updateMap(w_width, w_height);   /* 视景体复位 */
+        gYaw = 0.0;  gPitch = 0.0;  gDist = 6.0;  cameraUpdate();   /* 相机复位 */
         break;
 
     default: return;
     }
 
-    gModel = matrixMut(M, gModel);   /* 左乘累积 */
     glutPostRedisplay();
+}
+
+/* ================= 鼠标交互（仿 UE） ================= */
+void mouse(int btn, int state, int x, int y)
+{
+    if (btn == GLUT_RIGHT_BUTTON) {
+        if (state == GLUT_DOWN) { gRmbDown = 1; gLastX = x; gLastY = y; }
+        else { gRmbDown = 0; }
+    }
+    /* 滚轮 dolly：3=上滚(拉近) 4=下滚(拉远) */
+    else if (btn == 3) { gDist -= 0.5; if (gDist < 0.5) gDist = 0.5; cameraUpdate(); glutPostRedisplay(); }
+    else if (btn == 4) { gDist += 0.5; cameraUpdate(); glutPostRedisplay(); }
+}
+
+void motion(int x, int y)
+{
+    if (!gRmbDown) return;
+    int dx = x - gLastX, dy = y - gLastY;
+    gLastX = x;  gLastY = y;
+    if (dx == 0 && dy == 0) return;
+
+    gYaw += -dx * 0.3;          /* 水平：绕 Y 轴 */
+    gPitch += -dy * 0.3;          /* 垂直：绕 X 轴，clamp ±89° */
+    if (gPitch > 89.0) gPitch = 89.0;
+    if (gPitch < -89.0) gPitch = -89.0;
+
+    cameraUpdate();
+    glutPostRedisplay();
+}
+
+/* 每帧轮询 WASD 键状态（右键按住时生效）。
+   用 GetAsyncKeyState 而非 GLUT keyboard 回调，因为后者在鼠标按钮按住时不触发 */
+void idle(void)
+{
+    if (!gRmbDown) return;
+    int changed = 0;
+    if (GetAsyncKeyState('W') & 0x8000) { gDist -= 0.3; if (gDist < 0.5) gDist = 0.5; changed = 1; }
+    if (GetAsyncKeyState('S') & 0x8000) { gDist += 0.3; changed = 1; }
+    if (GetAsyncKeyState('A') & 0x8000) { gYaw += 2.0;  changed = 1; }
+    if (GetAsyncKeyState('D') & 0x8000) { gYaw -= 2.0;  changed = 1; }
+    if (changed) {
+        cameraUpdate();
+        glutPostRedisplay();
+    }
 }
 
 /* ================= 投影设置 ================= */
@@ -350,14 +357,14 @@ void reshape(int w, int h)
     if (w < 1) w = 1;
     if (h < 1) h = 1;
 
-    glViewport(0, 0, w, h);
+    glViewport(0, 0, w, h);              /* ① 渲染区域 = 整个窗口 */
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-        gluOrtho2D(-0.5 * w, 0.5 * w, -0.5 * h, 0.5 * h);
+    gluOrtho2D(-w / 2, w / 2, -h / 2, h / 2);    /* ② 定义一个 2D 正交画布 */
     glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    glLoadIdentity();                    /* ③ 模型视图矩阵清空（不做任何变换） */
+    updateMap(w, h);                     /* ④ 你自己的映射参数跟着更新 */
 
-    updateMap(w, h);
 }
 
 /* ================= 主函数 ================= */
@@ -372,24 +379,27 @@ int main(int argc, char** argv)
     glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
     gModel = identity();
 
-    /* 启动时直接加载 OBJ 模型（失败则之后可按 m 重试） */
+
     {
         Vec3* vv = 0;  int* ff = 0;
         if (loadObj(OBJ_PATH, 2.0, &vv, &gObjMesh.nv, &ff, &gObjMesh.nf)) {
-            gObjMesh.v    = vv;
+            gObjMesh.v = vv;
             gObjMesh.face = ff;
-            gObjMesh.n    = 3;
-            gObjMesh.color.x = 0.75;  gObjMesh.color.y = 0.55;  gObjMesh.color.z = 0.30;
+            gObjMesh.n = 3;
             gObjMesh.model = identity();
+
             gShowObj = 1;
         }
     }
 
-    initCurves();           /* 构建两条曲线与两个曲面的几何数据 */
+
 
     glutReshapeFunc(reshape);
     glutDisplayFunc(display);
     glutKeyboardFunc(keyboard);
+    glutMouseFunc(mouse);
+    glutMotionFunc(motion);
+    glutIdleFunc(idle);
 
     glutMainLoop();
     return 0;

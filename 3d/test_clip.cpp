@@ -32,7 +32,7 @@ int main(void)
     gPersp = 1;
     {
         Vec3 q[4] = { {-1,-1, 1}, {1,-1, 1}, {1,1,-5}, {-1,1,-5} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C1 persp near-crossing quad\n");
         dump("clipped", out, n);
         int okz = 1;
@@ -43,7 +43,7 @@ int main(void)
     /* C2: perspective, quad far outside the left side plane -> empty */
     {
         Vec3 q[4] = { {-40,-1,-5}, {-30,-1,-5}, {-30,1,-5}, {-40,1,-5} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C2 persp fully left of window -> n=%d (expect 0)\n\n", n);
     }
 
@@ -51,7 +51,7 @@ int main(void)
            at z=-2 the window edge is x=-4; x=-6 half must be cut */
     {
         Vec3 q[4] = { {-6,-1,-2}, {-2,-1,-2}, {-2,1,-2}, {-6,1,-2} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C3 persp left-edge crossing at z=d\n");
         dump("clipped", out, n);
         printf("  expect min x = -4 at z=-2 (side plane through eye)\n\n");
@@ -61,7 +61,7 @@ int main(void)
     gPersp = 0;
     {
         Vec3 q[4] = { {-6,-2,-5}, {6,-2,-5}, {6,2,-5}, {-6,2,-5} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C4 ortho box clip\n");
         dump("clipped", out, n);
         printf("  expect x in [-4,4], y in [-2,2]\n\n");
@@ -70,7 +70,7 @@ int main(void)
     /* C5: ortho, entirely beyond far plane -> empty */
     {
         Vec3 q[4] = { {-1,-1,-2000}, {1,-1,-2000}, {1,1,-2000}, {-1,1,-2000} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C5 beyond far plane -> n=%d (expect 0)\n\n", n);
     }
 
@@ -79,7 +79,7 @@ int main(void)
     gPersp = 1;
     {
         Vec3 q[4] = { {-2,-1,-5}, {2,-1,-5}, {2,1,-5}, {-2,1,-5} };
-        n = clipFrustum(q, 4, out, 16);
+        n = clipFrustum(q, 4, out, 16, 0, 0, 0);
         printf("C6 fully inside quad -> n=%d (expect 4)\n", n);
         dump("clipped", out, n);
     }

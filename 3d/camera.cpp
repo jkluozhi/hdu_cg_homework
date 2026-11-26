@@ -3,15 +3,30 @@
 
 
 
-/* Ïà»ú×´Ì¬£ºÈ«¹¤³ÌÎ¨Ò»¶¨Òå´¦£¨ÆäËûÎÄ¼şÍ¨¹ı camera.h µÄ extern Ê¹ÓÃ£© */
+/* ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½Î¨Ò»ï¿½ï¿½ï¿½å´¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½Í¨ï¿½ï¿½ camera.h ï¿½ï¿½ extern Ê¹ï¿½Ã£ï¿½ */
 Vec3   gEye = { 0, 0, 6 };   /* E */
 Vec3   gCenter = { 0, 0, 0 };   /* C */
 Vec3   gUp = { 0, 1, 0 };   /* Up */
-double gD = -2.0;          /* Í¶Ó°Æ½Ãæ z_v = d */
-int    gPersp = 0;             /* 0 Õı½»£¬1 Í¸ÊÓ */
+double gD = -2.0;          /* Í¶Ó°Æ½ï¿½ï¿½ z_v = d */
+int    gPersp = 0;
+double gNear = -2.0;         /* near clip plane z_v (default == gD, can move independently) */             /* 0 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½1 Í¸ï¿½ï¿½ */
+double gYaw = 0.0, gPitch = 0.0, gDist = 6.0;   /* çƒåæ ‡ç›¸æœºçŠ¶æ€ï¼šç»•å›ºå®šåŸç‚¹ */
 
-/* ================= ÊÓÍ¼±ä»» ================= */
-/* ÓÉ E / C / Up ¹¹Ôì£ºn Ö¸ÏòÏà»úºó·½£¨E-C£©£¬u ÏòÓÒ£¬v ÏòÉÏ */
+/* ================= çƒåæ ‡ç›¸æœº ================= */
+/* ç”± yaw/pitch/dist é‡ç®— gEye/gUpï¼ŒgCenter æ’ä¸ºåŸç‚¹ã€‚
+   yaw ç»• Y è½´ï¼Œpitch ç»• X è½´ï¼›åˆå§‹å…¨ 0 æ—¶ gEye=(0,0,6) ä¸æ—§çŠ¶æ€ä¸€è‡´ */
+void cameraUpdate(void)
+{
+    Matrix R = matrixMut(rotationY(gYaw), rotationX(gPitch));
+    Vec3 eye0 = { 0, 0, gDist };
+    Vec3 up0  = { 0, 1, 0 };
+    gEye = applyMatrix(R, eye0);
+    gUp  = applyMatrix(R, up0);
+    gCenter.x = 0;  gCenter.y = 0;  gCenter.z = 0;
+}
+
+/* ================= ï¿½ï¿½Í¼ï¿½ä»» ================= */
+/* view volume is controlled by gWinX/gWinY and gD, not this matrix */
 Matrix viewMatrix(void)
 {
     Vec3 n = vnorm(vsub(gEye, gCenter));
@@ -26,10 +41,10 @@ Matrix viewMatrix(void)
 }
 
 
-/* ================= Í¶Ó° + Æë´Î³ı·¨ ================= */
-/* Í¸ÊÓ£º°ÑµãÍ¶µ½ z_v = d µÄÆ½ÃæÉÏ£¬x_p = x_v * d / z_v
-   Õı½»£ºÖ±½ÓÈ¡ÊÓÍ¼×ø±ê£¬½á¹ûÓë d ÎŞ¹Ø
-   ·µ»Ø 0 ±íÊ¾¸Ãµã²»¿ÉÍ¶Ó°£¨z_v ¡Ö 0£¬»òÔÚÍ¶Ó°Æ½Ãæ±³ºó£©£¬ÕûÌõÏß¶Î¶ªÆú */
+/* ================= Í¶Ó° + ï¿½ï¿½Î³ï¿½ï¿½ï¿½ ================= */
+/* Í¸ï¿½Ó£ï¿½ï¿½Ñµï¿½Í¶ï¿½ï¿½ z_v = d ï¿½ï¿½Æ½ï¿½ï¿½ï¿½Ï£ï¿½x_p = x_v * d / z_v
+   ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö±ï¿½ï¿½È¡ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ê£¬ï¿½ï¿½ï¿½ï¿½ï¿½ d ï¿½Ş¹ï¿½
+   ï¿½ï¿½ï¿½ï¿½ 0 ï¿½ï¿½Ê¾ï¿½Ãµã²»ï¿½ï¿½Í¶Ó°ï¿½ï¿½z_v ï¿½ï¿½ 0ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¶Ó°Æ½ï¿½æ±³ï¿½ó£©£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß¶Î¶ï¿½ï¿½ï¿½ */
 int projectPoint(Vec3 v, double* xp, double* yp)
 {
     if (!gPersp) {
@@ -37,9 +52,9 @@ int projectPoint(Vec3 v, double* xp, double* yp)
         *yp = v.y;
         return 1;
     }
-    if (fabs(v.z) < 1e-9) return 0;         /* ÂäÔÚ¹ıÑÛ¾¦µÄÆ½ÃæÉÏ */
-    if (v.z * gD <= 0)   return 0;          /* Í¶Ó°Æ½ÃæÁíÒ»²à */
-    double k = gD / v.z;                    /* Æë´Î³ı·¨µÄÉÌ */
+    if (fabs(v.z) < 1e-9) return 0;         /* ï¿½ï¿½ï¿½Ú¹ï¿½ï¿½Û¾ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ */
+    if (v.z * gD <= 0)   return 0;          /* Í¶Ó°Æ½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ */
+    double k = gD / v.z;                    /* ï¿½ï¿½Î³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
     *xp = v.x * k;
     *yp = v.y * k;
     return 1;
